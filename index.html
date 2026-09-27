@@ -10,25 +10,26 @@
   <div class="app">
     <h1>P2P Voice Chat</h1>
 
-    <div class="panel">
-      <button id="createOfferBtn">Создать оффер (Я звоню)</button>
-      <button id="joinBtn">Принять оффер (Я принимаю)</button>
-      <button id="hangupBtn" disabled>Отключиться</button>
+    <!-- Панель комнаты -->
+    <div class="room-panel">
+      <div class="room-info">
+        <span>Комната:</span>
+        <strong id="roomLabel">—</strong>
+      </div>
+
+      <div class="room-actions">
+        <button id="createRoomBtn">Создать комнату</button>
+        <input id="roomInput" type="text" placeholder="Введите ID комнаты" />
+        <button id="joinRoomBtn">Подключиться</button>
+      </div>
+
+      <div class="room-actions">
+        <button id="copyLinkBtn">Скопировать ссылку</button>
+        <button id="hangupBtn" class="danger" disabled>Отключиться</button>
+      </div>
     </div>
 
-    <div class="signaling">
-      <div class="signaling-col">
-        <label>Мой код (отправь собеседнику):</label>
-        <textarea id="localSignal" readonly placeholder="Здесь появится код..."></textarea>
-        <button id="copyLocalBtn">Копировать</button>
-      </div>
-      <div class="signaling-col">
-        <label>Код собеседника (вставь сюда):</label>
-        <textarea id="remoteSignal" placeholder="Вставь сюда код..."></textarea>
-        <button id="applyRemoteBtn">Применить</button>
-      </div>
-    </div>
-
+    <!-- Видео собеседника -->
     <div class="media">
       <div class="video-wrapper">
         <video id="remoteVideo" autoplay playsinline muted></video>
@@ -38,6 +39,7 @@
 
     <audio id="remoteAudio" autoplay></audio>
 
+    <!-- Управление звуком -->
     <div class="audio-controls">
       <label>
         Микрофон:
@@ -50,6 +52,7 @@
       </div>
     </div>
 
+    <!-- Демонстрация экрана -->
     <div class="screen-share">
       <button id="shareScreenBtn">Показать экран</button>
       <button id="stopShareBtn" disabled>Остановить</button>

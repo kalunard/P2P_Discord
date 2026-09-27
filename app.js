@@ -1,64 +1,65 @@
 // ============================================================
-// P2P Voice Chat на WebRTC с ручной сигнализацией
-// Версия 4.0 — публичный TURN без регистрации (openrelay.metered.ca)
-// + исправленный onconnectionstatechange с таймером
-// + защита кнопки "Применить" от двойного клика
+// P2P Voice Chat — клиент с WebSocket-сигнализацией
+// Версия 5.1 — исправления:
+//  - блокировка кнопок комнаты после клика
+//  - сброс state.roomId при cleanup
+//  - защита от двойного join
+//  - разблокировка roomInput после cleanup
 // ============================================================
 
-import {
-  buildSignal,
-  parseSignal,
-  detectSignalRole,
-  checkBrowserSupport,
-} from './signaling.js';
+import { checkBrowserSupport } from './signaling.js';
 
 // ===== Состояние =====
 const state = {
+  // WebSocket
+  ws: null,
+  roomId: null,
+  isInitiator: false,
+
+  // WebRTC
   pc: null,
   localStream: null,
   screenStream: null,
   remoteStream: null,
-  isCaller: false,
-  pendingCandidates: [],
+  audioSender: null,
+  videoSender: null,
 
+  // Web Audio
   audioCtx: null,
   micGainNode: null,
   micSourceNode: null,
   mixerDest: null,
   screenAudioSource: null,
   screenAudioGain: null,
-
-  audioSender: null,
-  videoSender: null,
 };
-
+let pcInitPromise = null;
 // ===== DOM =====
 const $ = (id) => document.getElementById(id);
 const els = {
-  createOfferBtn: $('createOfferBtn'),
-  joinBtn: $('joinBtn'),
+  roomLabel: $('roomLabel'),
+  createRoomBtn: $('createRoomBtn'),
+  joinRoomBtn: $('joinRoomBtn'),
+  roomInput: $('roomInput'),
+  copyLinkBtn: $('copyLinkBtn'),
   hangupBtn: $('hangupBtn'),
-  localSignal: $('localSignal'),
-  remoteSignal: $('remoteSignal'),
-  copyLocalBtn: $('copyLocalBtn'),
-  applyRemoteBtn: $('applyRemoteBtn'),
+
   remoteVideo: $('remoteVideo'),
   remoteAudio: $('remoteAudio'),
   remotePlaceholder: $('remotePlaceholder'),
+
   micVolume: $('micVolume'),
   micMuted: $('micMuted'),
   deafen: $('deafen'),
   micLevelBar: $('micLevelBar'),
+
   shareScreenBtn: $('shareScreenBtn'),
   stopShareBtn: $('stopShareBtn'),
   shareAudio: $('shareAudio'),
+
   status: $('status'),
 };
 
-// ===== ICE: публичный TURN OpenRelay, БЕЗ РЕГИСТРАЦИИ =====
-// Креды "openrelayproject" — общеизвестные публичные,
-// используются в тестовых проектах по всему интернету.
-// НЕ ГАРАНТИРУЕТ uptime. Для продакшена нужен свой coturn.
+// ===== ICE =====
 const iceConfig = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
@@ -93,20 +94,203 @@ function log(...args) {
   }
 })();
 
-// ===== Ожидание ICE =====
-function waitForIceGathering(pc, timeout = 3000) {
-  return new Promise((resolve) => {
-    if (pc.iceGatheringState === 'complete') return resolve();
-    const check = () => {
-      if (pc.iceGatheringState === 'complete') {
-        pc.removeEventListener('icegatheringstatechange', check);
-        resolve();
+// ============================================================
+// WebSocket-сигнализация
+// ============================================================
+function connectWebSocket() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const url = `${proto}//${location.host}`;
+  log('Подключение к WS:', url);
+
+  const ws = new WebSocket(url);
+  state.ws = ws;
+
+  ws.onopen = () => {
+    log('WebSocket открыт');
+    setStatus('подключено к серверу');
+  };
+
+  ws.onmessage = async (event) => {
+    let msg;
+    try {
+      msg = JSON.parse(event.data);
+    } catch (e) {
+      console.error('Некорректное сообщение WS:', event.data);
+      return;
+    }
+    log('WS ←', msg.type, msg.payload || '');
+
+    try {
+      if (msg.type === 'joined') {
+        state.isInitiator = msg.payload.isInitiator;
+        state.roomId = msg.payload.roomId;
+        els.roomLabel.textContent = state.roomId;
+        setStatus(
+          msg.payload.isInitiator
+            ? 'ожидание собеседника...'
+            : 'собеседник найден, соединяемся...'
+        );
+        await setupPeerConnection();
+        return;
       }
-    };
-    pc.addEventListener('icegatheringstatechange', check);
-    setTimeout(resolve, timeout);
-  });
+
+      if (msg.type === 'peer-joined') {
+        setStatus('собеседник подключился');
+        if (state.isInitiator && state.pc && !state.pc.localDescription) {
+          await createAndSendOffer();
+        }
+        return;
+      }
+
+      if (msg.type === 'offer') {
+        await handleRemoteOffer(msg.payload.sdp);
+        return;
+      }
+
+      if (msg.type === 'answer') {
+        if (!state.pc) {
+          log('Answer получен без pc — игнорируем');
+          return;
+        }
+        await state.pc.setRemoteDescription(msg.payload.sdp);
+        setStatus('соединение устанавливается...');
+        return;
+      }
+
+      if (msg.type === 'ice-candidate') {
+        if (state.pc && state.pc.remoteDescription) {
+          await state.pc.addIceCandidate(msg.payload.candidate);
+        }
+        return;
+      }
+
+      if (msg.type === 'peer-left') {
+        setStatus('собеседник отключился');
+        cleanup(false);
+        return;
+      }
+    } catch (err) {
+      console.error('Ошибка обработки WS-сообщения:', err);
+      setStatus('ошибка: ' + err.message);
+    }
+  };
+
+  ws.onclose = () => {
+    log('WebSocket закрыт');
+    setStatus('отключено от сервера');
+  };
+
+  ws.onerror = (e) => {
+    console.error('WebSocket error:', e);
+    setStatus('ошибка WebSocket');
+  };
 }
+
+async function createAndSendOffer() {
+  await setupPeerConnection();
+  if (!state.pc) return;
+  const offer = await state.pc.createOffer();
+  await state.pc.setLocalDescription(offer);
+  state.ws.send(
+    JSON.stringify({
+      type: 'offer',
+      payload: { sdp: offer },
+    })
+  );
+  log('Оффер отправлен');
+}
+
+async function handleRemoteOffer(sdp) {
+  await setupPeerConnection();
+  await state.pc.setRemoteDescription(sdp);
+  const answer = await state.pc.createAnswer();
+  await state.pc.setLocalDescription(answer);
+  state.ws.send(
+    JSON.stringify({
+      type: 'answer',
+      payload: { sdp: answer },
+    })
+  );
+  log('Ансвер отправлен');
+}
+
+// ===== Кнопки комнаты =====
+els.createRoomBtn.addEventListener('click', () => {
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+    setStatus('нет соединения с сервером');
+    return;
+  }
+  if (state.roomId) {
+    setStatus('ты уже в комнате ' + state.roomId);
+    return;
+  }
+  const roomId = Math.random().toString(36).slice(2, 8);
+  state.roomId = roomId;
+  els.roomLabel.textContent = roomId;
+
+  // Блокируем кнопки, чтобы избежать двойного join
+  els.createRoomBtn.disabled = true;
+  els.joinRoomBtn.disabled = true;
+  els.roomInput.disabled = true;
+
+  state.ws.send(
+    JSON.stringify({
+      type: 'join',
+      payload: { roomId },
+    })
+  );
+  setStatus('создаём комнату ' + roomId + '...');
+});
+
+els.joinRoomBtn.addEventListener('click', () => {
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+    setStatus('нет соединения с сервером');
+    return;
+  }
+  if (state.roomId) {
+    setStatus('ты уже в комнате ' + state.roomId);
+    return;
+  }
+  const roomId = els.roomInput.value.trim();
+  if (!roomId) {
+    setStatus('введи ID комнаты');
+    return;
+  }
+  state.roomId = roomId;
+  els.roomLabel.textContent = roomId;
+
+  // Блокируем кнопки, чтобы избежать двойного join
+  els.createRoomBtn.disabled = true;
+  els.joinRoomBtn.disabled = true;
+  els.roomInput.disabled = true;
+
+  state.ws.send(
+    JSON.stringify({
+      type: 'join',
+      payload: { roomId },
+    })
+  );
+  setStatus('подключаемся к ' + roomId + '...');
+});
+
+els.copyLinkBtn.addEventListener('click', async () => {
+  if (!state.roomId) {
+    setStatus('сначала создай или подключись к комнате');
+    return;
+  }
+  const link = `${location.origin}/?room=${state.roomId}`;
+  try {
+    await navigator.clipboard.writeText(link);
+    els.copyLinkBtn.textContent = 'Скопировано!';
+    setTimeout(() => (els.copyLinkBtn.textContent = 'Скопировать ссылку'), 1500);
+  } catch (err) {
+    console.error(err);
+  }
+});
+
+// ============================================================
+// WebRTC
+// ============================================================
 
 // ===== Заглушка видео =====
 function createPlaceholderVideoTrack() {
@@ -125,9 +309,18 @@ function createPeerConnection() {
 
   pc.onnegotiationneeded = null;
 
+  // Отправляем ICE-кандидатов через WebSocket
   pc.onicecandidate = (event) => {
     if (event.candidate) {
       log('ICE-кандидат:', event.candidate.type);
+      if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+        state.ws.send(
+          JSON.stringify({
+            type: 'ice-candidate',
+            payload: { candidate: event.candidate },
+          })
+        );
+      }
     } else {
       log('ICE-сбор завершён');
     }
@@ -166,6 +359,8 @@ function createPeerConnection() {
         clearTimeout(disconnectTimer);
         disconnectTimer = null;
       }
+      // Разблокируем кнопку шаринга экрана
+      els.shareScreenBtn.disabled = false;
     }
 
     if (st === 'disconnected') {
@@ -240,7 +435,7 @@ async function createOutgoingAudio() {
   return state.mixerDest.stream;
 }
 
-// ===== Индикатор уровня =====
+// ===== Индикатор уровня микрофона =====
 function setupMicLevelMeter(stream) {
   const ctx = new AudioContext();
   const source = ctx.createMediaStreamSource(stream);
@@ -257,138 +452,39 @@ function setupMicLevelMeter(stream) {
   draw();
 }
 
-// ===== Инициализация участника =====
-async function setupParticipant(isCaller) {
-  if (state.pc) return;
+// ===== Инициализация PeerConnection =====
+async function setupPeerConnection() {
+  if (pcInitPromise) return pcInitPromise;
+  pcInitPromise = (async () => {
+    state.pc = createPeerConnection();
 
-  state.isCaller = isCaller;
-  state.pc = createPeerConnection();
+    const outgoingAudio = await createOutgoingAudio();
+    const audioTrack = outgoingAudio.getAudioTracks()[0];
+    state.audioSender = state.pc.addTrack(audioTrack, outgoingAudio);
 
-  const outgoingAudio = await createOutgoingAudio();
-  const audioTrack = outgoingAudio.getAudioTracks()[0];
-  state.audioSender = state.pc.addTrack(audioTrack, outgoingAudio);
+    const placeholderVideo = createPlaceholderVideoTrack();
+    state.videoSender = state.pc.addTrack(
+      placeholderVideo,
+      new MediaStream([placeholderVideo])
+    );
 
-  const placeholderVideo = createPlaceholderVideoTrack();
-  state.videoSender = state.pc.addTrack(placeholderVideo, new MediaStream([placeholderVideo]));
-
-  log('m-line созданы (audio + video placeholder)');
-
-  els.hangupBtn.disabled = false;
-  els.createOfferBtn.disabled = true;
-  els.joinBtn.disabled = true;
+    log('m-line созданы (audio + video placeholder)');
+    els.hangupBtn.disabled = false;
+  })();
+  return pcInitPromise;
 }
 
-// ===== Создание оффера =====
-els.createOfferBtn.addEventListener('click', async () => {
-  console.log('[click] createOffer');
-  try {
-    await setupParticipant(true);
-
-    const offer = await state.pc.createOffer();
-    await state.pc.setLocalDescription(offer);
-    await waitForIceGathering(state.pc);
-
-    els.localSignal.value = JSON.stringify(buildSignal(state.pc), null, 2);
-    setStatus('оффер создан, отправь код собеседнику');
-  } catch (err) {
-    console.error('Ошибка создания оффера:', err);
-    setStatus('ошибка создания оффера: ' + err.message);
-  }
-});
-
-// ===== Принятие оффера =====
-els.joinBtn.addEventListener('click', async () => {
-  console.log('[click] join');
-  try {
-    await setupParticipant(false);
-    setStatus('ожидание кода от собеседника...');
-  } catch (err) {
-    console.error('Ошибка инициализации:', err);
-    setStatus('ошибка инициализации: ' + err.message);
-  }
-});
-
-// ===== Применение кода собеседника =====
-els.applyRemoteBtn.addEventListener('click', async () => {
-  console.log('[click] applyRemote. pc =', state.pc);
-
-  if (els.applyRemoteBtn.disabled) return;
-  els.applyRemoteBtn.disabled = true;
-
-  try {
-    if (!state.pc) {
-      setStatus('ОШИБКА: сначала нажми "Создать оффер" или "Принять оффер"');
-      return;
-    }
-
-    const raw = els.remoteSignal.value.trim();
-    if (!raw) {
-      setStatus('ОШИБКА: поле "Код собеседника" пустое');
-      return;
-    }
-
-    if (state.isCaller && !state.pc.localDescription) {
-      setStatus('ОШИБКА: оффер ещё не создан');
-      return;
-    }
-
-    const signal = parseSignal(raw);
-    const role = detectSignalRole(signal, state.isCaller);
-    log('Роль сигнала:', role);
-
-    if (role === 'create-answer') {
-      await state.pc.setRemoteDescription(signal.sdp);
-      const answer = await state.pc.createAnswer();
-      await state.pc.setLocalDescription(answer);
-      await waitForIceGathering(state.pc);
-      els.localSignal.value = JSON.stringify(buildSignal(state.pc), null, 2);
-      setStatus('ансвер создан, отправь код обратно');
-      return;
-    }
-
-    if (role === 'accept-answer') {
-      await state.pc.setRemoteDescription(signal.sdp);
-      setStatus('соединение устанавливается...');
-      return;
-    }
-
-    if (role === 'already-caller') {
-      setStatus('ОШИБКА: ты звонящий, этот код — оффер');
-      return;
-    }
-
-    if (role === 'already-answerer') {
-      setStatus('ОШИБКА: ты принимающий, этот код — ансвер');
-      return;
-    }
-
-    setStatus('ОШИБКА: неизвестный тип сигнала');
-  } catch (err) {
-    console.error('Ошибка применения:', err);
-    setStatus('ОШИБКА применения: ' + err.message);
-  } finally {
-    els.applyRemoteBtn.disabled = false;
-  }
-});
-
-// ===== Копирование =====
-els.copyLocalBtn.addEventListener('click', async () => {
-  if (!els.localSignal.value) return;
-  try {
-    await navigator.clipboard.writeText(els.localSignal.value);
-    els.copyLocalBtn.textContent = 'Скопировано!';
-    setTimeout(() => (els.copyLocalBtn.textContent = 'Копировать'), 1500);
-  } catch (err) {
-    console.error(err);
-  }
-});
-
 // ===== Отключение =====
-els.hangupBtn.addEventListener('click', cleanup);
+els.hangupBtn.addEventListener('click', () => cleanup(true));
 
-function cleanup() {
+function cleanup(sendLeave = true) {
+  if (sendLeave && state.ws && state.ws.readyState === WebSocket.OPEN) {
+    state.ws.send(JSON.stringify({ type: 'leave' }));
+  }
   if (state.pc) {
-    try { state.pc.close(); } catch (e) {}
+    try {
+      state.pc.close();
+    } catch (e) {}
     state.pc = null;
   }
   if (state.localStream) {
@@ -400,38 +496,47 @@ function cleanup() {
     state.screenStream = null;
   }
   if (state.screenAudioSource) {
-    try { state.screenAudioSource.disconnect(); } catch (e) {}
+    try {
+      state.screenAudioSource.disconnect();
+    } catch (e) {}
     state.screenAudioSource = null;
   }
   if (state.screenAudioGain) {
-    try { state.screenAudioGain.disconnect(); } catch (e) {}
+    try {
+      state.screenAudioGain.disconnect();
+    } catch (e) {}
     state.screenAudioGain = null;
   }
 
   state.remoteStream = null;
   state.audioSender = null;
   state.videoSender = null;
+  state.isInitiator = false;
+  state.roomId = null;
+  pcInitPromise = null;  
 
   els.remoteVideo.srcObject = null;
   els.remoteVideo.classList.remove('active');
   els.remotePlaceholder.style.display = 'flex';
   els.remoteAudio.srcObject = null;
-  els.localSignal.value = '';
-  els.remoteSignal.value = '';
+  els.roomLabel.textContent = '—';
 
-  els.createOfferBtn.disabled = false;
-  els.joinBtn.disabled = false;
+  // Возвращаем кнопки комнаты в исходное состояние
+  els.createRoomBtn.disabled = false;
+  els.joinRoomBtn.disabled = false;
+  els.roomInput.disabled = false;
+
   els.hangupBtn.disabled = true;
   els.stopShareBtn.disabled = true;
-  els.shareScreenBtn.disabled = false;
+  els.shareScreenBtn.disabled = true;
 
   setStatus('отключено');
 }
 
 // ===== Демонстрация экрана =====
 els.shareScreenBtn.addEventListener('click', async () => {
-  if (!state.pc) {
-    setStatus('сначала установи соединение');
+  if (!state.pc || state.pc.connectionState !== 'connected') {
+    setStatus('сначала дождись соединения');
     return;
   }
 
@@ -499,11 +604,15 @@ async function stopScreenShare() {
     state.screenStream = null;
   }
   if (state.screenAudioSource) {
-    try { state.screenAudioSource.disconnect(); } catch (e) {}
+    try {
+      state.screenAudioSource.disconnect();
+    } catch (e) {}
     state.screenAudioSource = null;
   }
   if (state.screenAudioGain) {
-    try { state.screenAudioGain.disconnect(); } catch (e) {}
+    try {
+      state.screenAudioGain.disconnect();
+    } catch (e) {}
     state.screenAudioGain = null;
   }
   if (state.pc && state.videoSender) {
@@ -537,3 +646,16 @@ els.micMuted.addEventListener('change', (e) => {
 els.deafen.addEventListener('change', (e) => {
   els.remoteAudio.muted = e.target.checked;
 });
+
+// ===== Автоподключение по URL =====
+(function autoJoinFromUrl() {
+  // Кнопка "Показать экран" заблокирована, пока нет соединения
+  els.shareScreenBtn.disabled = true;
+
+  const params = new URLSearchParams(location.search);
+  const roomFromUrl = params.get('room');
+  if (roomFromUrl) {
+    els.roomInput.value = roomFromUrl;
+  }
+  connectWebSocket();
+})();

@@ -16,9 +16,162 @@ body {
   gap: 20px;
 }
 
-h1 { color: #f2f3f5; font-size: 24px; }
+h1 {
+  color: #f2f3f5;
+  font-size: 24px;
+  font-weight: 600;
+}
 
-.panel, .signaling, .audio-controls, .screen-share {
+/* ===== Панель комнаты ===== */
+.room-panel {
+  background: #2b2d31;
+  padding: 16px;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.room-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: #949ba4;
+}
+
+.room-info strong {
+  color: #5865f2;
+  font-family: monospace;
+  font-size: 16px;
+  letter-spacing: 1px;
+}
+
+.room-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.room-actions input {
+  background: #1e1f22;
+  color: #dbdee1;
+  border: 1px solid #3f4147;
+  border-radius: 4px;
+  padding: 8px 12px;
+  font-size: 14px;
+  flex: 1;
+  min-width: 150px;
+}
+
+.room-actions input:focus {
+  outline: none;
+  border-color: #5865f2;
+}
+
+/* ===== Кнопки ===== */
+button {
+  background: #5865f2;
+  color: white;
+  border: none;
+  padding: 10px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: background 0.15s;
+}
+
+button:hover:not(:disabled) { background: #4752c4; }
+button:disabled {
+  background: #4e5058;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+button.danger { background: #da373c; }
+button.danger:hover:not(:disabled) { background: #a12828; }
+
+/* ===== Медиа ===== */
+.media {
+  background: #000;
+  border-radius: 8px;
+  aspect-ratio: 16 / 9;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid #2b2d31;
+}
+
+.video-wrapper { width: 100%; height: 100%; }
+
+#remoteVideo {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: none;
+}
+
+#remoteVideo.active { display: block; }
+
+#remotePlaceholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #6d6f78;
+  font-size: 14px;
+}
+
+/* ===== Аудио-контролы ===== */
+.audio-controls {
+  background: #2b2d31;
+  padding: 16px;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.audio-controls label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  color: #dbdee1;
+}
+
+input[type="range"] {
+  width: 200px;
+  accent-color: #5865f2;
+}
+
+input[type="checkbox"] {
+  accent-color: #5865f2;
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.level-meter {
+  width: 200px;
+  height: 8px;
+  background: #1e1f22;
+  border-radius: 4px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+#micLevelBar {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #23a55a, #f0b232, #da373c);
+  transition: width 0.05s;
+}
+
+/* ===== Шаринг экрана ===== */
+.screen-share {
   background: #2b2d31;
   padding: 16px;
   border-radius: 8px;
@@ -28,87 +181,19 @@ h1 { color: #f2f3f5; font-size: 24px; }
   flex-wrap: wrap;
 }
 
-button {
-  background: #5865f2;
-  color: white;
-  border: none;
-  padding: 10px 16px;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 14px;
-  transition: background 0.15s;
-}
-button:hover:not(:disabled) { background: #4752c4; }
-button:disabled { background: #4e5058; cursor: not-allowed; }
-button.danger { background: #da373c; }
-button.danger:hover:not(:disabled) { background: #a12828; }
-
-.signaling { flex-direction: row; align-items: stretch; }
-.signaling-col {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  min-width: 250px;
-}
-.signaling textarea {
-  background: #1e1f22;
-  color: #dbdee1;
-  border: 1px solid #3f4147;
-  border-radius: 4px;
-  padding: 8px;
-  font-family: monospace;
-  font-size: 12px;
-  height: 120px;
-  resize: vertical;
-}
-
-.media {
-  background: #000;
-  border-radius: 8px;
-  aspect-ratio: 16 / 9;
-  position: relative;
-  overflow: hidden;
-}
-.video-wrapper { width: 100%; height: 100%; }
-#remoteVideo {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  display: none;
-}
-#remoteVideo.active { display: block; }
-#remotePlaceholder {
-  position: absolute;
-  inset: 0;
+.screen-share label {
   display: flex;
   align-items: center;
-  justify-content: center;
-  color: #6d6f78;
+  gap: 8px;
+  font-size: 14px;
 }
 
-.audio-controls { flex-direction: column; align-items: flex-start; }
-.audio-controls label { display: flex; align-items: center; gap: 8px; }
-input[type="range"] { width: 200px; }
-
-.level-meter {
-  width: 200px;
-  height: 8px;
-  background: #1e1f22;
-  border-radius: 4px;
-  overflow: hidden;
-}
-#micLevelBar {
-  height: 100%;
-  width: 0%;
-  background: linear-gradient(90deg, #23a55a, #f0b232, #da373c);
-  transition: width 0.05s;
-}
-
+/* ===== Статус ===== */
 #status {
-  padding: 8px 12px;
+  padding: 12px 16px;
   background: #2b2d31;
-  border-radius: 4px;
-  font-size: 13px;
+  border-radius: 8px;
+  font-size: 14px;
   color: #949ba4;
+  border-left: 3px solid #5865f2;
 }
