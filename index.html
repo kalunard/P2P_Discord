@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>P2P Voice Chat</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div class="app">
+    <h1>P2P Voice Chat</h1>
+
+    <div class="panel">
+      <button id="createOfferBtn">Создать оффер (Я звоню)</button>
+      <button id="joinBtn">Принять оффер (Я принимаю)</button>
+      <button id="hangupBtn" disabled>Отключиться</button>
+    </div>
+
+    <div class="signaling">
+      <div class="signaling-col">
+        <label>Мой код (отправь собеседнику):</label>
+        <textarea id="localSignal" readonly placeholder="Здесь появится код..."></textarea>
+        <button id="copyLocalBtn">Копировать</button>
+      </div>
+      <div class="signaling-col">
+        <label>Код собеседника (вставь сюда):</label>
+        <textarea id="remoteSignal" placeholder="Вставь сюда код..."></textarea>
+        <button id="applyRemoteBtn">Применить</button>
+      </div>
+    </div>
+
+    <div class="media">
+      <div class="video-wrapper">
+        <video id="remoteVideo" autoplay playsinline muted></video>
+        <div id="remotePlaceholder">Удаленное видео появится здесь</div>
+      </div>
+    </div>
+
+    <audio id="remoteAudio" autoplay></audio>
+
+    <div class="audio-controls">
+      <label>
+        Микрофон:
+        <input type="range" id="micVolume" min="0" max="2" step="0.1" value="1" />
+      </label>
+      <label><input type="checkbox" id="micMuted" /> Мьют микрофона</label>
+      <label><input type="checkbox" id="deafen" /> Заглушить всех (Deafen)</label>
+      <div class="level-meter">
+        <div id="micLevelBar"></div>
+      </div>
+    </div>
+
+    <div class="screen-share">
+      <button id="shareScreenBtn">Показать экран</button>
+      <button id="stopShareBtn" disabled>Остановить</button>
+      <label><input type="checkbox" id="shareAudio" checked /> Со звуком</label>
+    </div>
+
+    <div id="status">Статус: отключено</div>
+  </div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
