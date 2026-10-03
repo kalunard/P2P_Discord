@@ -1,5 +1,5 @@
 {
-  "name": "p2p-diskord",
+  "name": "p2p-voice-chat",
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {

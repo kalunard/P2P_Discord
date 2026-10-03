@@ -8,7 +8,32 @@
 // ============================================================
 
 import { checkBrowserSupport } from './signaling.js';
+// ===== Инициализация PeerConnection =====
+async function setupPeerConnection() {
+  if (pcInitPromise) return pcInitPromise;
 
+  await loadTurnCredentials(); 
+  
+  pcInitPromise = (async () => {
+    state.pc = createPeerConnection();
+
+    const outgoingAudio = await createOutgoingAudio();
+    const audioTrack = outgoingAudio.getAudioTracks()[0];
+    state.audioSender = state.pc.addTrack(audioTrack, outgoingAudio);
+
+    const placeholderVideo = createPlaceholderVideoTrack();
+    state.videoSender = state.pc.addTrack(
+      placeholderVideo,
+      new MediaStream([placeholderVideo])
+    );
+
+    log('m-line созданы (audio + video placeholder)');
+  })().catch((err) => {
+    pcInitPromise = null;
+    throw err;
+  });
+  return pcInitPromise;
+}
 // ===== Состояние =====
 const state = {
   // WebSocket
@@ -60,21 +85,28 @@ const els = {
 };
 
 // ===== ICE =====
-const iceConfig = {
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    {
-      urls: 'turn:turn.evan-brass.net:3478',
-      username: 'user',
-      credential: 'password',
-    },
-    {
-      urls: 'turn:turn.evan-brass.net:3478?transport=tcp',
-      username: 'user',
-      credential: 'password',
-    },
-  ],
+let iceConfig = {
+  iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
 };
+
+async function loadTurnCredentials() {
+  try {
+    const res = await fetch('/turn-credentials');
+    if (!res.ok) throw new Error('TURN credentials failed');
+    const creds = await res.json();
+
+    iceConfig.iceServers.push({
+      urls: creds.uris,
+      username: creds.username,
+      credential: creds.credential,
+    });
+
+    log('TURN credentials loaded, TTL:', creds.ttl);
+  } catch (err) {
+    console.warn('TURN credentials unavailable, using STUN only:', err);
+    setStatus('STUN only (TURN недоступен)');
+  }
+}
 
 // ===== Утилиты =====
 function setStatus(text) {
@@ -166,6 +198,12 @@ function connectWebSocket() {
 
       if (msg.type === 'peer-left') {
         setStatus('собеседник отключился');
+        cleanup(false);
+        return;
+      }
+
+      if (msg.type === 'room-full') {
+        setStatus('комната занята');
         cleanup(false);
         return;
       }
@@ -359,8 +397,9 @@ function createPeerConnection() {
         clearTimeout(disconnectTimer);
         disconnectTimer = null;
       }
-      // Разблокируем кнопку шаринга экрана
+      // Разблокируем кнопки только при connected
       els.shareScreenBtn.disabled = false;
+      els.hangupBtn.disabled = false;
     }
 
     if (st === 'disconnected') {
@@ -450,28 +489,6 @@ function setupMicLevelMeter(stream) {
     requestAnimationFrame(draw);
   }
   draw();
-}
-
-// ===== Инициализация PeerConnection =====
-async function setupPeerConnection() {
-  if (pcInitPromise) return pcInitPromise;
-  pcInitPromise = (async () => {
-    state.pc = createPeerConnection();
-
-    const outgoingAudio = await createOutgoingAudio();
-    const audioTrack = outgoingAudio.getAudioTracks()[0];
-    state.audioSender = state.pc.addTrack(audioTrack, outgoingAudio);
-
-    const placeholderVideo = createPlaceholderVideoTrack();
-    state.videoSender = state.pc.addTrack(
-      placeholderVideo,
-      new MediaStream([placeholderVideo])
-    );
-
-    log('m-line созданы (audio + video placeholder)');
-    els.hangupBtn.disabled = false;
-  })();
-  return pcInitPromise;
 }
 
 // ===== Отключение =====
@@ -637,6 +654,7 @@ els.micMuted.addEventListener('change', (e) => {
     if (e.target.checked) {
       state.micGainNode._prev = state.micGainNode.gain.value;
       state.micGainNode.gain.value = 0;
+      els.micLevelBar.style.width = '0%';
     } else {
       state.micGainNode.gain.value = state.micGainNode._prev ?? 1;
     }

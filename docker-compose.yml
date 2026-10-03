@@ -1,0 +1,32 @@
+services:
+  app:
+    build: .
+    container_name: p2p-chat
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - TURN_HOST=${TURN_HOST:-localhost}
+    secrets:
+      - turn_secret
+    networks:
+      - p2p-net
+
+  coturn:
+    image: coturn/coturn:4.14-alpine
+    container_name: coturn
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./turnserver.conf:/etc/coturn/turnserver.conf:ro
+    secrets:
+      - turn_secret
+
+networks:
+  p2p-net:
+    driver: bridge
+
+secrets:
+  turn_secret:
+    file: ./secrets/turn_secret.txt
